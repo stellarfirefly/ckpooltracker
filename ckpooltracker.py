@@ -3,6 +3,7 @@ import requests
 import json
 import time
 import matplotlib.pyplot as plt
+import numpy as np
 import matplotlib.dates as mdates
 
 DATA_PROTOCOL = "http"
@@ -64,16 +65,22 @@ def parse_hashrate_to_ths(hashrate_str):
 
 def main():
     # Initialize df with explicit dtypes to prevent FutureWarning on concat
-    df = pd.DataFrame(columns=['timestamp', 'hashrate_THs']).astype({'timestamp': 'datetime64[ns]', 'hashrate_THs': 'float64'})
+    df = pd.DataFrame(columns=['timestamp', 'hashrate_THs', 'hashrate5m_THs']).astype({
+        'timestamp': 'datetime64[ns]',
+        'hashrate_THs': 'float64',
+        'hashrate5m_THs': 'float64'
+    })
 
     plt.ion() 
     fig, ax = plt.subplots(figsize=(12, 6))
-    line, = ax.plot([], [], marker='o', linestyle='-')
+    line, = ax.plot([], [], marker='o', linestyle='-', label='Hashrate 1m Avg')
+    line2, = ax.plot([], [], marker='x', linestyle='--', color='lightcoral', label='Hashrate 5m Avg') # New line for 5m
     
     ax.set_xlabel("Time")
     ax.set_ylabel("Hashrate (TH/s)")
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
     plt.grid(True)
+    ax.legend(loc='upper left') # Add legend
     fig.autofmt_xdate() # Auto-format x-axis dates for readability    
     # Adjust layout to provide more space at the top for the title
     plt.tight_layout(rect=[0, 0, 1, 0.92]) 
@@ -83,6 +90,7 @@ def main():
 
     next_data_fetch_time = time.monotonic() # Initialize to fetch data on the first iteration
 
+    latest_workers_count = None # Variable to store the latest worker count
     while True:
         current_time = time.monotonic()
         new_data_processed_this_cycle = False # Reset for each potential fetch cycle
@@ -99,37 +107,99 @@ def main():
                 response.raise_for_status()
                 data = response.json()
 
+                # Initialize with NaN, so if a value is not found, it remains NaN
+                current_hashrate_ths = np.nan
+                current_hashrate5m_ths = np.nan
+                current_workers_count = None # Reset for this fetch cycle
+                
+                processed_1m = False
+                processed_5m = False
+                processed_workers = False
+                log_parts = [f"{current_timestamp_for_loop}:"]
+
                 hashrate1m_str = data.get("hashrate1m")
                 if hashrate1m_str is None:
-                    print(f"{current_timestamp_for_loop}: 'hashrate1m' not found in JSON response. Skipping.")
+                    log_parts.append("hashrate1m not found.")
                 else:
                     current_hashrate_ths = parse_hashrate_to_ths(hashrate1m_str)
-                    print(f"{current_timestamp_for_loop}: Fetched hashrate: {hashrate1m_str} -> {current_hashrate_ths:.4f} TH/s")
-                    new_row = pd.DataFrame([{'timestamp': current_timestamp_for_loop, 'hashrate_THs': current_hashrate_ths}])
+                    log_parts.append(f"1m: {hashrate1m_str} -> {current_hashrate_ths:.4f} TH/s")
+                    processed_1m = True
+
+                hashrate5m_str = data.get("hashrate5m") # Get 5m hashrate
+                if hashrate5m_str is None:
+                    log_parts.append("hashrate5m not found.")
+                else:
+                    current_hashrate5m_ths = parse_hashrate_to_ths(hashrate5m_str)
+                    log_parts.append(f"5m: {hashrate5m_str} -> {current_hashrate5m_ths:.4f} TH/s")
+                    processed_5m = True
+
+                workers_val = data.get("workers") # Get workers count
+                if workers_val is None:
+                    log_parts.append("workers not found.")
+                else:
+                    current_workers_count = workers_val # Assuming it's an int or string that doesn't need parsing
+                    latest_workers_count = current_workers_count # Update the global latest
+                    log_parts.append(f"Workers: {current_workers_count}")
+                    processed_workers = True
+                
+                print(" ".join(log_parts))
+
+                if processed_1m or processed_5m: # Add row if at least one value was processed
+                    new_row_data = {
+                        'timestamp': current_timestamp_for_loop,
+                        'hashrate_THs': current_hashrate_ths,
+                        'hashrate5m_THs': current_hashrate5m_ths
+                    }
+                    new_row = pd.DataFrame([new_row_data])
                     df = pd.concat([df, new_row], ignore_index=True)
                     new_data_processed_this_cycle = True
 
                 # Prune data to the window size
                 cutoff_time = current_timestamp_for_loop - pd.Timedelta(minutes=DATA_WINDOW_MINUTES)
                 df = df[df['timestamp'] >= cutoff_time]
-                
+
                 # Update plot data and title
                 if not df.empty:
                     line.set_data(df['timestamp'], df['hashrate_THs'])
+                    line2.set_data(df['timestamp'], df['hashrate5m_THs']) # Set data for the new line
                     ax.relim()
                     ax.autoscale_view(True,True,True)
                     
+                    title_base = f"ckpool hashrate - last {DATA_WINDOW_MINUTES} min"
+                    info_parts = []
+                    source_label = ""
+
                     if new_data_processed_this_cycle:
-                        ax.set_title(f"ckpool hashrate (1m avg) - last {DATA_WINDOW_MINUTES} min\ncurrent: {current_hashrate_ths:.2f} TH/s")
-                    else: # df is not empty, but no new data this cycle (e.g. only pruning happened)
-                        last_val_in_df = df['hashrate_THs'].iloc[-1]
-                        ax.set_title(f"ckpool hashrate (1m avg) - last {DATA_WINDOW_MINUTES} min\nlast in window: {last_val_in_df:.2f} TH/s")
+                        source_label = "Current"
+                        if not pd.isna(current_hashrate_ths):
+                            info_parts.append(f"1m: {current_hashrate_ths:.2f}THs")
+                        if not pd.isna(current_hashrate5m_ths):
+                            info_parts.append(f"5m: {current_hashrate5m_ths:.2f}THs")
+                        if current_workers_count is not None:
+                            info_parts.append(f"workers: {current_workers_count}")
+
+                    elif not df.empty: # df not empty, but no new data (e.g. pruning)
+                        source_label = "Last in window"
+                        if 'hashrate_THs' in df.columns and not df['hashrate_THs'].empty and not pd.isna(df['hashrate_THs'].iloc[-1]):
+                            info_parts.append(f"1m: {df['hashrate_THs'].iloc[-1]:.2f}THs")
+                        if 'hashrate5m_THs' in df.columns and not df['hashrate5m_THs'].empty and not pd.isna(df['hashrate5m_THs'].iloc[-1]):
+                            info_parts.append(f"5m: {df['hashrate5m_THs'].iloc[-1]:.2f}THs")
+                        if latest_workers_count is not None: # Use the globally stored latest if not a new fetch
+                            info_parts.append(f"Workers: {latest_workers_count}")
+
+                    if info_parts:
+                        # Ensure "Workers" comes last if present
+                        ax.set_title(f"{title_base}\n{source_label}: {', '.join(info_parts)}")
+                    else:
+                        ax.set_title(title_base + "\n(No data to display)")
+
                 else: # df is empty
                     line.set_data([], [])
+                    line2.set_data([], []) # Clear new line as well
                     plot_window_start_time = current_timestamp_for_loop - pd.Timedelta(minutes=DATA_WINDOW_MINUTES)
                     ax.set_xlim(plot_window_start_time, current_timestamp_for_loop)
                     ax.set_ylim(0, 1)
-                    ax.set_title(f"CKPool Hashrate (1m Avg) - Last {DATA_WINDOW_MINUTES} Min\nWaiting for data...")
+                    ax.set_title(f"CKPool Hashrate - Last {DATA_WINDOW_MINUTES} Min\nWaiting for data...")
                 
                 fig.canvas.draw_idle() # Schedule redraw after plot updates
 
