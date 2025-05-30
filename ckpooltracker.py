@@ -15,7 +15,7 @@ DATA_USER = "bc1q3fs68hnjtyshjzxtww9tp8me9jppc2jvlavk4w"
 DATAURL = f"{DATA_PROTOCOL}://{DATA_HOST}:{DATA_PORT}/{DATA_SCRIPT}?user={DATA_USER}"
 
 FETCH_INTERVAL_SECONDS = 60
-DATA_WINDOW_MINUTES = 60
+DATA_WINDOW_MINUTES = 100 # Changed to show approximately 100 points if fetch interval is 1 min
 DISPLAY_FRAMERATE = 20 # frames per second
 
 def parse_hashrate_to_ths(hashrate_str):
@@ -65,16 +65,16 @@ def parse_hashrate_to_ths(hashrate_str):
 
 def main():
     # Initialize df with explicit dtypes to prevent FutureWarning on concat
-    df = pd.DataFrame(columns=['timestamp', 'hashrate_THs', 'hashrate5m_THs']).astype({
+    df = pd.DataFrame(columns=['timestamp', 'hashrate5m_THs', 'hashrate1h_THs']).astype({
         'timestamp': 'datetime64[ns]',
-        'hashrate_THs': 'float64',
-        'hashrate5m_THs': 'float64'
+        'hashrate5m_THs': 'float64',
+        'hashrate1h_THs': 'float64'
     })
 
     plt.ion() 
     fig, ax = plt.subplots(figsize=(12, 6))
-    line, = ax.plot([], [], marker='o', linestyle='-', label='Hashrate 1m Avg')
-    line2, = ax.plot([], [], marker='x', linestyle='--', color='lightcoral', label='Hashrate 5m Avg') # New line for 5m
+    line_5m, = ax.plot([], [], marker='o', linestyle='-', label='Hashrate 5m Avg')
+    line_1h, = ax.plot([], [], marker='x', linestyle='--', color='lightcoral', label='Hashrate 1h Avg')
     
     ax.set_xlabel("Time")
     ax.set_ylabel("Hashrate (TH/s)")
@@ -108,30 +108,30 @@ def main():
                 data = response.json()
 
                 # Initialize with NaN, so if a value is not found, it remains NaN
-                current_hashrate_ths = np.nan
-                current_hashrate5m_ths = np.nan
+                current_hashrate5m_val_ths = np.nan
+                current_hashrate1h_val_ths = np.nan
                 current_workers_count = None # Reset for this fetch cycle
                 
-                processed_1m = False
-                processed_5m = False
+                processed_5m_data = False
+                processed_1h_data = False
                 processed_workers = False
                 log_parts = [f"{current_timestamp_for_loop}:"]
 
-                hashrate1m_str = data.get("hashrate1m")
-                if hashrate1m_str is None:
-                    log_parts.append("hashrate1m not found.")
-                else:
-                    current_hashrate_ths = parse_hashrate_to_ths(hashrate1m_str)
-                    log_parts.append(f"1m: {hashrate1m_str} -> {current_hashrate_ths:.4f} TH/s")
-                    processed_1m = True
-
-                hashrate5m_str = data.get("hashrate5m") # Get 5m hashrate
+                hashrate5m_str = data.get("hashrate5m") # Fetch 5m hashrate
                 if hashrate5m_str is None:
-                    log_parts.append("hashrate5m not found.")
+                    log_parts.append("hashrate5m (for 5m avg) not found.")
                 else:
-                    current_hashrate5m_ths = parse_hashrate_to_ths(hashrate5m_str)
-                    log_parts.append(f"5m: {hashrate5m_str} -> {current_hashrate5m_ths:.4f} TH/s")
-                    processed_5m = True
+                    current_hashrate5m_val_ths = parse_hashrate_to_ths(hashrate5m_str)
+                    log_parts.append(f"5m: {hashrate5m_str} -> {current_hashrate5m_val_ths:.4f} TH/s")
+                    processed_5m_data = True
+
+                hashrate1h_str = data.get("hashrate1hr") # Fetch 1h hashrate (corrected key)
+                if hashrate1h_str is None:
+                    log_parts.append("hashrate1hr (for 1h avg) not found.")
+                else:
+                    current_hashrate1h_val_ths = parse_hashrate_to_ths(hashrate1h_str)
+                    log_parts.append(f"1h: {hashrate1h_str} -> {current_hashrate1h_val_ths:.4f} TH/s")
+                    processed_1h_data = True
 
                 workers_val = data.get("workers") # Get workers count
                 if workers_val is None:
@@ -144,11 +144,11 @@ def main():
                 
                 print(" ".join(log_parts))
 
-                if processed_1m or processed_5m: # Add row if at least one value was processed
+                if processed_5m_data or processed_1h_data: # Add row if at least one hashrate value was processed
                     new_row_data = {
                         'timestamp': current_timestamp_for_loop,
-                        'hashrate_THs': current_hashrate_ths,
-                        'hashrate5m_THs': current_hashrate5m_ths
+                        'hashrate5m_THs': current_hashrate5m_val_ths,
+                        'hashrate1h_THs': current_hashrate1h_val_ths
                     }
                     new_row = pd.DataFrame([new_row_data])
                     df = pd.concat([df, new_row], ignore_index=True)
@@ -160,8 +160,8 @@ def main():
 
                 # Update plot data and title
                 if not df.empty:
-                    line.set_data(df['timestamp'], df['hashrate_THs'])
-                    line2.set_data(df['timestamp'], df['hashrate5m_THs']) # Set data for the new line
+                    line_5m.set_data(df['timestamp'], df['hashrate5m_THs'])
+                    line_1h.set_data(df['timestamp'], df['hashrate1h_THs'])
                     ax.relim()
                     ax.autoscale_view(True,True,True)
                     
@@ -171,19 +171,19 @@ def main():
 
                     if new_data_processed_this_cycle:
                         source_label = "Current"
-                        if not pd.isna(current_hashrate_ths):
-                            info_parts.append(f"1m: {current_hashrate_ths:.2f}THs")
-                        if not pd.isna(current_hashrate5m_ths):
-                            info_parts.append(f"5m: {current_hashrate5m_ths:.2f}THs")
+                        if not pd.isna(current_hashrate5m_val_ths):
+                            info_parts.append(f"5m: {current_hashrate5m_val_ths:.2f}THs")
+                        if not pd.isna(current_hashrate1h_val_ths):
+                            info_parts.append(f"1h: {current_hashrate1h_val_ths:.2f}THs")
                         if current_workers_count is not None:
                             info_parts.append(f"workers: {current_workers_count}")
 
                     elif not df.empty: # df not empty, but no new data (e.g. pruning)
                         source_label = "Last in window"
-                        if 'hashrate_THs' in df.columns and not df['hashrate_THs'].empty and not pd.isna(df['hashrate_THs'].iloc[-1]):
-                            info_parts.append(f"1m: {df['hashrate_THs'].iloc[-1]:.2f}THs")
                         if 'hashrate5m_THs' in df.columns and not df['hashrate5m_THs'].empty and not pd.isna(df['hashrate5m_THs'].iloc[-1]):
                             info_parts.append(f"5m: {df['hashrate5m_THs'].iloc[-1]:.2f}THs")
+                        if 'hashrate1h_THs' in df.columns and not df['hashrate1h_THs'].empty and not pd.isna(df['hashrate1h_THs'].iloc[-1]):
+                            info_parts.append(f"1h: {df['hashrate1h_THs'].iloc[-1]:.2f}THs")
                         if latest_workers_count is not None: # Use the globally stored latest if not a new fetch
                             info_parts.append(f"Workers: {latest_workers_count}")
 
@@ -194,8 +194,8 @@ def main():
                         ax.set_title(title_base + "\n(No data to display)")
 
                 else: # df is empty
-                    line.set_data([], [])
-                    line2.set_data([], []) # Clear new line as well
+                    line_5m.set_data([], [])
+                    line_1h.set_data([], [])
                     plot_window_start_time = current_timestamp_for_loop - pd.Timedelta(minutes=DATA_WINDOW_MINUTES)
                     ax.set_xlim(plot_window_start_time, current_timestamp_for_loop)
                     ax.set_ylim(0, 1)
