@@ -6,13 +6,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import matplotlib.dates as mdates
 
-DATA_PROTOCOL = "http"
-DATA_HOST = "192.168.0.50"
-DATA_PORT = "80"
-DATA_SCRIPT = "~firefly/ckpool/userstats.py"
+DATA_PROTOCOL = "https"
+DATA_HOST = "ckpool.studentsparks.org"
+DATA_PORT = "443"
+DATA_PATH = "users"
 DATA_USER = "bc1q3fs68hnjtyshjzxtww9tp8me9jppc2jvlavk4w"
 # Construct DATAURL from components
-DATAURL = f"{DATA_PROTOCOL}://{DATA_HOST}:{DATA_PORT}/{DATA_SCRIPT}?user={DATA_USER}"
+DATAURL = f"{DATA_PROTOCOL}://{DATA_HOST}:{DATA_PORT}/{DATA_PATH}/{DATA_USER}"
 
 FETCH_INTERVAL_SECONDS = 60
 DATA_WINDOW_MINUTES = 100 # Changed to show approximately 100 points if fetch interval is 1 min
